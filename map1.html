@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Map - Pickup & Drop-off</title>
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Leaflet Control Geocoder CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+
+    <style>
+        #map {
+            height: 90vh;
+            width: 100%;
+        }
+
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        }
+
+        #findLocationBtn {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            padding: 10px 15px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        #findLocationBtn:hover {
+            background-color: #0056b3;
+        }
+
+        input, button {
+            margin: 5px 0;
+            padding: 5px;
+            width: 200px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+        }
+
+        button {
+            background-color: green;
+            color: white;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: darkgreen;
+        }
+    </style>
+</head>
+<body>
+
+    <button id="findLocationBtn">Find My Location</button>
+
+    <div id="controls">
+        <!-- <input id="searchBox" type="text" placeholder="Search for a place..."> -->
+        <input id="pickupLocation" type="text" placeholder="Pickup Location (Auto/Manual)">
+        <input id="dropoffLocation" type="text" placeholder="Drop-off Location">
+        <button id="showRoute">Show Route</button>
+    </div>
+
+    <div id="map"></div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Leaflet Control Geocoder -->
+    <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+    <!-- Leaflet Routing Machine -->
+    <script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
+
+    <script>
+        const map = L.map('map').setView([20, 0], 2);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        let pickupMarker, dropoffMarker, routePolyline;
+        let currentLocation = null; // Store user's current location
+
+        function findMyLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const { latitude, longitude } = position.coords;
+                        currentLocation = { lat: latitude, lng: longitude }; 
+                        map.setView([latitude, longitude], 15);
+
+                        if (pickupMarker) map.removeLayer(pickupMarker);
+                        pickupMarker = L.marker([latitude, longitude]).addTo(map)
+                            .bindPopup("Your Current Location (Pickup)").openPopup();
+
+                        document.getElementById('pickupLocation').value = "Current Location";
+                    },
+                    () => alert("Unable to retrieve location."),
+                    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                );
+            } else {
+                alert("Geolocation is not supported by your browser.");
+            }
+        }
+
+        document.getElementById('findLocationBtn').addEventListener('click', findMyLocation);
+
+        // Add search functionality
+        let geocoder = L.Control.geocoder({
+            defaultMarkGeocode: false
+        })
+        .on('markgeocode', function(e) {
+            const latlng = e.geocode.center;
+            map.setView(latlng, 15);
+
+            if (pickupMarker) map.removeLayer(pickupMarker);
+            pickupMarker = L.marker(latlng).addTo(map)
+                .bindPopup(e.geocode.name).openPopup();
+
+            document.getElementById('pickupLocation').value = e.geocode.name;
+            currentLocation = { lat: latlng.lat, lng: latlng.lng }; 
+        })
+        .addTo(map);
+
+        // Function to show route
+        document.getElementById('showRoute').addEventListener('click', function() {
+            let pickup = document.getElementById('pickupLocation').value;
+            let dropoff = document.getElementById('dropoffLocation').value;
+
+            if (!dropoff) {
+                alert("Please enter a drop-off location.");
+                return;
+            }
+
+            // Use current location as pickup if "Current Location" is selected
+            let pickupCoords = currentLocation;
+            let geocodeURL = "https://nominatim.openstreetmap.org/search?format=json&q=";
+
+            if (pickup !== "Current Location") {
+                fetch(geocodeURL + encodeURIComponent(pickup))
+                .then(res => res.json())
+                .then(data => {
+                    if (data.length > 0) {
+                        pickupCoords = { lat: data[0].lat, lng: data[0].lon };
+                        processDropoff(pickupCoords, dropoff);
+                    } else {
+                        alert("Invalid pickup location.");
+                    }
+                });
+            } else {
+                processDropoff(pickupCoords, dropoff);
+            }
+        });
+
+        function processDropoff(pickupCoords, dropoff) {
+            fetch("https://nominatim.openstreetmap.org/search?format=json&q=" + encodeURIComponent(dropoff))
+            .then(res => res.json())
+            .then(data => {
+                if (data.length > 0) {
+                    let dropoffCoords = { lat: data[0].lat, lng: data[0].lon };
+
+                    if (dropoffMarker) map.removeLayer(dropoffMarker);
+                    dropoffMarker = L.marker([dropoffCoords.lat, dropoffCoords.lng]).addTo(map)
+                        .bindPopup("Drop-off Location").openPopup();
+
+                    if (routePolyline) map.removeLayer(routePolyline);
+                    routePolyline = L.polyline([
+                        [pickupCoords.lat, pickupCoords.lng],
+                        [dropoffCoords.lat, dropoffCoords.lng]
+                    ], { color: 'blue' }).addTo(map);
+
+                    map.fitBounds([
+                        [pickupCoords.lat, pickupCoords.lng],
+                        [dropoffCoords.lat, dropoffCoords.lng]
+                    ]);
+                } else {
+                    alert("Invalid drop-off location.");
+                }
+            });
+        }
+    </script>
+
+</body>
+</html>
